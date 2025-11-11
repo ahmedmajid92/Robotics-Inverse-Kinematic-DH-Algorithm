@@ -59,6 +59,18 @@ def plot_robot_arm(joint_positions):
         name='Joints'
     ))
 
+    # --- Red baseline from base (0,0,0) down to z = -400 ---
+    # Note: y is flipped for visualization, but 0 stays 0.
+    fig.add_trace(go.Scatter3d(
+        x=[0, 0],
+        y=[0, 0],
+        z=[0, -400],
+        mode='lines',
+        line=dict(color='red', width=6),
+        name='Base Line',
+        showlegend=False
+    ))
+
     # Fixed symmetric ranges to match paper
     AX_MIN, AX_MAX = -400.0, 400.0
 
@@ -66,7 +78,6 @@ def plot_robot_arm(joint_positions):
         title="3D Simulation",
         scene=dict(
             # X increases visually from left -> right by REVERSING the axis direction:
-            # setting range [AX_MAX, AX_MIN] flips the rendered axis.
             xaxis=dict(title='X (mm)', range=[AX_MAX, AX_MIN], autorange=False),
             # Y increases right -> left (reverse the axis direction)
             yaxis=dict(title='Y (mm)', range=[AX_MAX, AX_MIN], autorange=False),
