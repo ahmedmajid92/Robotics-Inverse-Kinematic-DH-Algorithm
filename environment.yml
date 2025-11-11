@@ -1,0 +1,10 @@
+name: robotics_ik
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10    # A stable, modern Python version
+  - numpy=1.26.4   # CRITICAL: Pins numpy to < 2.0 to solve version conflicts
+  - pandas         # Required by Dash for data tables
+  - plotly         # The core 3D visualization library
+  - dash           # The web application framework
+  - dash-bootstrap-components # For a professional, grid-based UI layout
