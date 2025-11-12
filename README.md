@@ -232,7 +232,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
    - *Journal of Applied Mechanics*, 22(2), 215-221.
 
 ## 👤 Author
-
+s
 **Ahmed Majid**
 - GitHub: [@ahmedmajid92](https://github.com/ahmedmajid92)
 

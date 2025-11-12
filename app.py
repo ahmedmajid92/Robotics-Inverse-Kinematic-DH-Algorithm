@@ -6,7 +6,7 @@ visualize the 5-DOF robotic arm.
 This application replicates the functionality of the MATLAB GUI shown 
 in the paper, providing:
     - User input fields for target position (Px, Py, Pz)
-    - Elbow configuration selector (forced to elbow-up for paper consistency)
+    - Elbow configuration selector (elbow-up or elbow-down)
     - 3D visualization of robot arm using Plotly
     - Output tables showing joint angles and positions
     - Error handling with fallback to home position
@@ -27,32 +27,6 @@ import numpy as np
 
 # Import our custom kinematics module (IK/FK solvers)
 import kinematics as kin
-
-# ==============================================================================
-# CONFIGURATION AND HELPER FUNCTIONS
-# ==============================================================================
-
-def force_elbow_up(_: float, __: str) -> str:
-    """
-    Force elbow-up configuration regardless of user selection or target position.
-    
-    This function overrides any elbow mode selection to ensure consistency with
-    the research paper, which exclusively uses elbow-up configuration (θ3 < 0)
-    in both validation cases.
-    
-    Args:
-        _: Target Px value (unused, kept for function signature compatibility)
-        __: User's elbow mode selection (unused, will be overridden)
-    
-    Returns:
-        Always returns "up" to force elbow-up configuration
-    
-    Rationale:
-        The paper's screenshots and angle tables both show elbow-up poses.
-        While the mathematics supports elbow-down, we prioritize paper-faithful
-        reproduction for validation purposes.
-    """
-    return "up"
 
 # ==============================================================================
 # VISUALIZATION FUNCTIONS
@@ -362,18 +336,17 @@ inputs_card = dbc.Card([
         # Horizontal rule separator
         html.Hr(),
         
-        # Elbow configuration dropdown (currently overridden to "up")
+        # Elbow configuration dropdown (now functional with 2 options)
         dbc.Row([
             dbc.Col(dbc.Label("Elbow Config:"), width=3, className="text-end"),
             dbc.Col(
                 dcc.Dropdown(
                     id='elbow-mode-dropdown',
                     options=[
-                        {'label': 'Auto (Paper-based)', 'value': 'auto'},  # Automatic selection
-                        {'label': 'Elbow Up', 'value': 'up'},              # Force elbow up
-                        {'label': 'Elbow Down', 'value': 'down'}           # Force elbow down
+                        {'label': 'Elbow Up', 'value': 'up'},      # Elbow-up (default, matches paper)
+                        {'label': 'Elbow Down', 'value': 'down'}   # Elbow-down (alternative solution)
                     ],
-                    value='up',              # Default to elbow up
+                    value='up',              # Default to elbow up (paper's approach)
                     clearable=False          # Don't allow clearing the selection
                 ),
                 width=9
@@ -510,7 +483,7 @@ def update_simulation(n_clicks, px, py, pz, elbow_mode):
     This function is called whenever the "Calculate Inverse Kinematics" button
     is clicked. It performs the following steps:
         1. Validate inputs (ensure all values provided)
-        2. Force elbow-up configuration (paper consistency)
+        2. Use user-selected elbow configuration (up or down)
         3. Call IK solver from kinematics module
         4. Generate 3D visualization of result
         5. Format output tables
@@ -521,7 +494,7 @@ def update_simulation(n_clicks, px, py, pz, elbow_mode):
         px: X-coordinate of target position (from input field)
         py: Y-coordinate of target position (from input field)
         pz: Z-coordinate of target position (from input field)
-        elbow_mode: User's elbow configuration selection (will be overridden)
+        elbow_mode: User's elbow configuration selection ('up' or 'down')
     
     Returns:
         Tuple of 5 elements (matching the 5 Outputs):
@@ -557,25 +530,18 @@ def update_simulation(n_clicks, px, py, pz, elbow_mode):
         px_val, py_val, pz_val = float(px), float(py), float(pz)
 
         # ------------------------------------------------------------------
-        # STEP 2: Force elbow-up configuration for paper consistency
+        # STEP 2: Use user-selected elbow configuration (no override)
         # ------------------------------------------------------------------
-        # This overrides any user selection to ensure we match paper results
-        resolved_mode = force_elbow_up(px_val, elbow_mode)
+        # The user's selection is now respected ('up' or 'down')
+        resolved_mode = elbow_mode if elbow_mode in ['up', 'down'] else 'up'
 
         # ------------------------------------------------------------------
-        # STEP 3: Call inverse kinematics solver
+        # STEP 3: Call inverse kinematics solver with selected configuration
         # ------------------------------------------------------------------
-        # Check which IK function is available (handles different versions)
-        if hasattr(kin, "solve_ik"):
-            # Newer version: solve_ik returns dict with angles, joints, meta
-            ik_res = kin.solve_ik(px_val, py_val, pz_val, elbow_mode=resolved_mode)
-            thetas_deg = ik_res["angles"]           # Extract angles list
-            joint_positions = np.asarray(ik_res["joints"], dtype=float)  # Extract positions
-        else:
-            # Older version: calculate_ik returns tuple (angles, intermediates)
-            thetas_deg, _ = kin.calculate_ik(px_val, py_val, pz_val, elbow_mode=resolved_mode)
-            # Need to call FK separately to get positions
-            joint_positions = kin.get_all_joint_positions(thetas_deg)
+        # The solve_ik function now properly handles both elbow modes
+        ik_res = kin.solve_ik(px_val, py_val, pz_val, elbow_mode=resolved_mode)
+        thetas_deg = ik_res["angles"]           # Extract angles list
+        joint_positions = np.asarray(ik_res["joints"], dtype=float)  # Extract positions
 
         # ------------------------------------------------------------------
         # STEP 4: Generate visualization and format tables
@@ -599,11 +565,7 @@ def update_simulation(n_clicks, px, py, pz, elbow_mode):
         
         try:
             # Try to compute FK for home position
-            if hasattr(kin, "forward_kinematics"):
-                pts, _ = kin.forward_kinematics(home_thetas)
-                home_positions = np.asarray(pts, dtype=float)
-            else:
-                home_positions = kin.get_all_joint_positions(home_thetas)
+            home_positions = kin.get_all_joint_positions(home_thetas)
         except Exception:
             # If even home position fails, use hardcoded fallback
             home_positions = np.array([

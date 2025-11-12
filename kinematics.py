@@ -5,7 +5,7 @@ Exact geometric FK/IK for the 5-DOF arm from:
 "Inverse Kinematics Analysis and Simulation of a 5 DOF Robotic Arm using MATLAB"
 
 Paper-aligned assumptions:
-  - Elbow-up solution (θ3 < 0)
+  - Supports both elbow-up (θ3 < 0) and elbow-down (θ3 > 0) configurations
   - θ5 = 90°
   - Wrist pitch φ depends on target quadrant (matches the two demo cases):
         Px ≥ 0  → φ = 11°  ⇒ θ234 = 79°
@@ -213,11 +213,10 @@ def _phi_deg_for_target(px: float) -> float:
 
 def solve_ik(px, py, pz, elbow_mode="up"):
     """
-    Paper-faithful inverse kinematics solver for 5-DOF robotic arm.
+    Inverse kinematics solver for 5-DOF robotic arm with dual elbow configurations.
     
     This function implements the geometric IK solution from the research paper,
-    specifically using the "elbow-up" configuration (θ3 < 0) which matches
-    both validation cases in the paper.
+    supporting both "elbow-up" (θ3 < 0) and "elbow-down" (θ3 > 0) configurations.
     
     Algorithm Steps (from paper):
         1. Choose wrist pitch φ based on target quadrant
@@ -225,8 +224,8 @@ def solve_ik(px, py, pz, elbow_mode="up"):
         3. Compute wrist center position by offsetting from target
         4. Calculate reach distance N and angle λ to wrist
         5. Use law of cosines to find angle μ at shoulder
-        6. Solve for elbow angle θ3 (negative for elbow-up)
-        7. Calculate shoulder angle θ2 = λ + μ
+        6. Solve for elbow angle θ3 (negative for elbow-up, positive for elbow-down)
+        7. Calculate shoulder angle θ2 (λ + μ for elbow-up, λ - μ for elbow-down)
         8. Determine wrist angle θ4 from constraint θ2+θ3+θ4 = 90°-φ
         9. Set tool roll θ5 = 90° (fixed)
     
@@ -234,7 +233,7 @@ def solve_ik(px, py, pz, elbow_mode="up"):
         px: Target X position in mm
         py: Target Y position in mm
         pz: Target Z position in mm
-        elbow_mode: Configuration selector ("up" or "down"), currently forced to "up"
+        elbow_mode: Configuration selector - "up" (default) or "down"
     
     Returns:
         Dictionary containing:
@@ -314,30 +313,42 @@ def solve_ik(px, py, pz, elbow_mode="up"):
     mu = acos(cos_mu)  # Result in radians
 
     # ------------------------------------------------------------------
-    # STEP 6: Elbow angle (θ3) - NEGATIVE for elbow-up configuration
+    # STEP 6: Elbow angle (θ3) - sign depends on elbow configuration
     # ------------------------------------------------------------------
     # Using law of cosines at the elbow joint
     # cos(θ3) = (N² - a2² - a3²) / (2·a2·a3)
     cos_t3 = _clamp((N**2 - a2**2 - a3**2) / (2.0 * a2 * a3))
     t3_mag = acos(cos_t3)  # Get the magnitude (always positive)
     
-    # Make it negative for elbow-up configuration (θ3 < 0)
-    # This matches the paper's convention and both validation cases
-    t3 = -t3_mag
+    # Apply sign based on elbow configuration
+    if elbow_mode.lower() == "up":
+        # Elbow-up: θ3 is NEGATIVE (elbow bent upward)
+        # This matches the paper's convention and both validation cases
+        t3 = -t3_mag
+        branch_desc = "elbow_up (θ3<0), θ2=λ+μ"
+    else:
+        # Elbow-down: θ3 is POSITIVE (elbow bent downward)
+        t3 = t3_mag
+        branch_desc = "elbow_down (θ3>0), θ2=λ-μ"
 
     # ------------------------------------------------------------------
-    # STEP 7: Shoulder angle (θ2) - uses λ + μ for elbow-up
+    # STEP 7: Shoulder angle (θ2) - formula depends on elbow configuration
     # ------------------------------------------------------------------
-    # For elbow-up: θ2 = λ + μ (angles add)
-    # For elbow-down: θ2 = λ - μ (angles subtract)
-    # We use addition because we're in elbow-up mode
-    t2 = lam + mu
+    if elbow_mode.lower() == "up":
+        # For elbow-up: θ2 = λ + μ (angles add)
+        # The shoulder must rotate further to accommodate upward elbow
+        t2 = lam + mu
+    else:
+        # For elbow-down: θ2 = λ - μ (angles subtract)
+        # The shoulder rotates less since elbow bends downward
+        t2 = lam - mu
 
     # ------------------------------------------------------------------
     # STEP 8: Wrist angle (θ4) - derived from sum constraint
     # ------------------------------------------------------------------
     # From the constraint θ2 + θ3 + θ4 = θ234, solve for θ4
     # θ4 = θ234 - θ2 - θ3
+    # This formula works for both elbow configurations
     t4 = radians(th234_deg) - t2 - t3
 
     # ------------------------------------------------------------------
@@ -346,7 +357,7 @@ def solve_ik(px, py, pz, elbow_mode="up"):
     thetas_deg = [
         degrees(th1),   # Base rotation
         degrees(t2),    # Shoulder angle
-        degrees(t3),    # Elbow angle (negative)
+        degrees(t3),    # Elbow angle (negative for up, positive for down)
         degrees(t4),    # Wrist angle
         TH5_DEG,        # Tool roll (fixed at 90°)
     ]
@@ -365,7 +376,7 @@ def solve_ik(px, py, pz, elbow_mode="up"):
         "wrist_center": {"Px_w": pxw, "Py_w": pyw, "Pz_w": pzw},  # Wrist position
         "lambda_deg": degrees(lam),                      # Angle to wrist from horizontal
         "mu_deg": degrees(mu),                           # Shoulder triangle angle
-        "branch": "elbow_up (θ3<0), θ2=λ+μ",           # Configuration identifier
+        "branch": branch_desc,                           # Configuration identifier
     }
     
     # Return complete solution package
