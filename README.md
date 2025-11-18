@@ -18,6 +18,8 @@ The application provides:
 ## 🎯 Features
 
 - ✅ Direct implementation of D-H parameters from research paper
+- ✅ **Smooth Robot Animation**: The robot arm now moves smoothly between poses instead of instantly jumping to the new position.
+- ✅ **Realistic 3D Model**: The robot is rendered with solid, multi-colored links, a proper base, and realistic lighting.
 - ✅ Real-time 3D visualization of robot configuration
 - ✅ Elbow-up configuration (matching paper's approach)
 - ✅ Forward kinematics validation
@@ -160,11 +162,14 @@ The IK solution uses a geometric approach with the following key equations:
 
 ## 🎨 Visualization Details
 
-The 3D plot uses the following coordinate system:
-- **X-axis**: Increases from left to right (range: [-400, 400] mm)
-- **Y-axis**: Increases from right to left (range: [-400, 400] mm)
-- **Z-axis**: Vertical axis (range: [-400, 400] mm)
-- **Red baseline**: Shows base connection from origin to z = -400 mm
+The 3D plot provides a realistic rendering of the robot with the following features:
+- **Solid Links**: Robot links are drawn as solid cylinders with distinct colors and realistic lighting effects.
+- **Circular Base**: The robot has a solid black circular base, providing a more realistic appearance.
+- **Coordinate System**:
+  - **X-axis**: Increases from left to right (range: [-400, 400] mm)
+  - **Y-axis**: Increases from right to left (range: [-400, 400] mm)
+  - **Z-axis**: Vertical axis (range: [-400, 400] mm)
+- **Red baseline**: Shows a static reference line from the origin down to z = -400 mm.
 - **Camera position**: Optimized for clear viewing (eye: x=2.2, y=0.8, z=1.4)
 
 ## 🧮 Test Cases
@@ -257,6 +262,11 @@ For questions or feedback:
 - Automatic wrist pitch selection based on target position
 - 3D visualization with proper coordinate system
 - Error handling for unreachable targets
+
+### v1.1.0
+- **Smooth Animation**: Added client-side animation for smooth transitions between robot poses.
+- **Enhanced Visualization**: Replaced line-based arm with solid, multi-colored 3D cylinders and a realistic base.
+- **Improved UI Stability**: Fixed rendering artifacts to ensure a stable coordinate system during interaction.
 
 ---
 

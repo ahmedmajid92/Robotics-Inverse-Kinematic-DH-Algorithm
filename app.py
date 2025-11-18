@@ -14,7 +14,7 @@ in the paper, providing:
 
 # Core Dash framework imports
 import dash
-from dash import dcc, html, dash_table, Input, Output, State
+from dash import dcc, html, dash_table, Input, Output, State, clientside_callback
 
 # Plotly for 3D visualization
 import plotly.graph_objects as go
@@ -32,7 +32,61 @@ import kinematics as kin
 # VISUALIZATION FUNCTIONS
 # ==============================================================================
 
-def plot_robot_arm(joint_positions):
+def get_cylinder_mesh(p1, p2, radius, n_sides=20):
+    """
+    Generates mesh data for a cylinder between two points.
+    """
+    length = np.linalg.norm(p2 - p1)
+    if length == 0:
+        return [], [], [], [], [], []
+
+    # Cylinder axis
+    axis = (p2 - p1) / length
+
+    # Perpendicular vector
+    if np.abs(axis[2]) < 0.99:
+        perp_axis = np.cross(axis, [0, 0, 1])
+    else:
+        perp_axis = np.cross(axis, [0, 1, 0])
+    perp_axis /= np.linalg.norm(perp_axis)
+    
+    # Second perpendicular vector
+    perp_axis2 = np.cross(axis, perp_axis)
+    
+    t = np.linspace(0, 2 * np.pi, n_sides + 1)
+    
+    # Points on the circle
+    circ_pts = radius * (np.outer(np.cos(t), perp_axis) + np.outer(np.sin(t), perp_axis2))
+
+    # Cylinder vertices
+    p_start = p1 + circ_pts
+    p_end = p2 + circ_pts
+
+    x = np.vstack([p_start[:, 0], p_end[:, 0]]).flatten('F')
+    y = np.vstack([p_start[:, 1], p_end[:, 1]]).flatten('F')
+    z = np.vstack([p_start[:, 2], p_end[:, 2]]).flatten('F')
+    
+    # Generate indices for triangles
+    # Vertices: 0..n_sides (bottom), n_sides+1 .. 2*n_sides+1 (top)
+    n_p = n_sides + 1
+    i_idx = []
+    j_idx = []
+    k_idx = []
+    
+    for k in range(n_sides):
+        # Triangle 1
+        i_idx.append(k)
+        j_idx.append(k + 1)
+        k_idx.append(k + n_p)
+        
+        # Triangle 2
+        i_idx.append(k + 1)
+        j_idx.append(k + n_p + 1)
+        k_idx.append(k + n_p)
+        
+    return x, y, z, i_idx, j_idx, k_idx
+
+def plot_robot_arm(joint_positions, fig=None):
     """
     Creates a 3D Plotly figure of the robotic arm with paper-aligned axes.
     
@@ -49,6 +103,8 @@ def plot_robot_arm(joint_positions):
                 Row 3: Joint 3 position (elbow)
                 Row 4: Joint 4 position (wrist)
                 Row 5: Joint 5 position (end-effector/tool)
+        fig (plotly.graph_objects.Figure, optional): An existing figure to update. 
+            If None, a new figure is created. Defaults to None.
 
     Returns:
         plotly.graph_objects.Figure: Interactive 3D plot configured with:
@@ -64,111 +120,98 @@ def plot_robot_arm(joint_positions):
         - Y-axis: Increases right → left (range reversed, data negated)
         - Z-axis: Standard vertical axis (range [-400, 400])
     """
-    # Convert input to numpy array and ensure float type
     jp = np.asarray(joint_positions, dtype=float)
 
-    # ------------------------------------------------------------------
-    # Axis transformation for visualization alignment
-    # ------------------------------------------------------------------
-    # The paper's screenshots show a specific view angle. To match it:
-    # - Keep X data as-is, but reverse axis direction via range parameter
-    # - Negate Y data AND reverse axis to create right-to-left orientation
-    # - Keep Z standard (vertical, upward positive)
+    x_plot = jp[:, 0]
+    y_plot = -jp[:, 1]
+    z_plot = jp[:, 2]
+
+    if fig is None:
+        fig = go.Figure()
+    else:
+        fig.data = []
+
+    # Define link radii and colors
+    link_radii = [15, 12, 12, 10, 8]
+    link_colors = ['#E41A1C', '#377EB8', '#4DAF4A', '#984EA3', '#FF7F00'] # distinct colors
+
+    # Add cylinders for each link
+    for i in range(len(jp) - 1):
+        p1 = jp[i]
+        p2 = jp[i+1]
+        radius = link_radii[i]
+        cx, cy, cz, ci, cj, ck = get_cylinder_mesh(p1, p2, radius)
+        
+        # Apply visualization transform to cylinder coordinates
+        cy_plot = -np.array(cy)
+        
+        fig.add_trace(go.Mesh3d(
+            x=cx, y=cy_plot, z=cz,
+            i=ci, j=cj, k=ck,
+            opacity=1.0,
+            color=link_colors[i],
+            name=f'Link {i+1}',
+            lighting=dict(ambient=0.6, diffuse=0.8, specular=0.2, roughness=0.5),
+            lightposition=dict(x=100, y=100, z=1000)
+        ))
+
+    # Add spheres for joints (exclude base at index 0)
+    fig.add_trace(go.Scatter3d(
+        x=x_plot[1:],   # Skip base
+        y=y_plot[1:],
+        z=z_plot[1:],
+        mode='markers',
+        marker=dict(size=10, color='blue', symbol='circle'),
+        name='Joints'
+    ))
+
+    # Add base as a flat cylinder (disk)
+    base_radius = 60
+    base_height = 2
+    # Use get_cylinder_mesh to create a short cylinder for the base
+    cx, cy, cz, ci, cj, ck = get_cylinder_mesh(
+        np.array([0, 0, -base_height]), 
+        np.array([0, 0, 0]), 
+        base_radius
+    )
+    cy_plot = -np.array(cy)
     
-    x_plot = jp[:, 0]       # X coordinates (no data transformation)
-    y_plot = -jp[:, 1]      # Y coordinates (negated for visualization)
-    z_plot = jp[:, 2]       # Z coordinates (no transformation)
-
-    # Initialize empty Plotly figure
-    fig = go.Figure()
-
-    # ------------------------------------------------------------------
-    # Add arm links (lines connecting consecutive joints)
-    # ------------------------------------------------------------------
-    fig.add_trace(go.Scatter3d(
-        x=x_plot,                      # X coordinates of all 6 points
-        y=y_plot,                      # Y coordinates (transformed)
-        z=z_plot,                      # Z coordinates
-        mode='lines',                  # Draw lines between points
-        line=dict(width=10),           # Thick line for visibility
-        name='Arm Links'               # Legend label
-    ))
-    
-    # ------------------------------------------------------------------
-    # Add joint markers (circles at each joint position)
-    # ------------------------------------------------------------------
-    fig.add_trace(go.Scatter3d(
-        x=x_plot,                      # Same coordinates as links
-        y=y_plot,
-        z=z_plot,
-        mode='markers',                # Draw only markers, no lines
-        marker=dict(size=8, symbol='circle'),  # Medium-sized circles
-        name='Joints'                  # Legend label
+    fig.add_trace(go.Mesh3d(
+        x=cx, y=cy_plot, z=cz,
+        i=ci, j=cj, k=ck,
+        opacity=1.0,
+        color='black',
+        name='Base'
     ))
 
-    # ------------------------------------------------------------------
-    # Add red baseline from base to z = -400 (visual reference)
-    # ------------------------------------------------------------------
-    # This vertical line helps visualize the base height and provides
-    # a reference for understanding the robot's vertical extent
+    # Add red baseline from base to z = -400
     fig.add_trace(go.Scatter3d(
-        x=[0, 0],                      # Vertical line at x=0
-        y=[0, 0],                      # And y=0 (at origin in XY plane)
-        z=[0, -400],                   # From base down to bottom of view
-        mode='lines',                  # Draw as line
-        line=dict(color='red', width=6),  # Red color, thick for visibility
-        name='Base Line',              # Legend label
-        showlegend=False               # Hide from legend (it's just a reference)
+        x=[0, 0],
+        y=[0, 0],
+        z=[0, -400],
+        mode='lines',
+        line=dict(color='red', width=6),
+        name='Base Line',
+        showlegend=False
     ))
 
-    # ------------------------------------------------------------------
-    # Define symmetric axis ranges for undistorted visualization
-    # ------------------------------------------------------------------
-    # Using symmetric ranges ensures the robot appears with correct proportions
+    # Configure plot layout
     AX_MIN, AX_MAX = -400.0, 400.0
-
-    # ------------------------------------------------------------------
-    # Configure plot layout and 3D scene properties
-    # ------------------------------------------------------------------
     fig.update_layout(
-        title="3D Simulation",         # Plot title
+        title="3D Simulation",
+        uirevision='constant', # Preserve camera view across updates
         scene=dict(
-            # X-axis: Left to right (achieved by reversing range)
-            xaxis=dict(
-                title='X (mm)',        # Axis label with units
-                range=[AX_MAX, AX_MIN],  # REVERSED: [400, -400] makes right=negative
-                autorange=False        # Disable autorange to maintain fixed view
-            ),
-            
-            # Y-axis: Right to left (achieved by reversing range + data negation)
-            yaxis=dict(
-                title='Y (mm)',
-                range=[AX_MAX, AX_MIN],  # REVERSED: [400, -400]
-                autorange=False
-            ),
-            
-            # Z-axis: Standard vertical (bottom to top)
-            zaxis=dict(
-                title='Z (mm)',
-                range=[AX_MIN, AX_MAX],  # Normal: [-400, 400]
-                autorange=False
-            ),
-            
-            # Maintain cubic aspect ratio (prevents distortion)
+            xaxis=dict(title='X (mm)', range=[AX_MAX, AX_MIN], autorange=False),
+            yaxis=dict(title='Y (mm)', range=[AX_MAX, AX_MIN], autorange=False),
+            zaxis=dict(title='Z (mm)', range=[AX_MIN, AX_MAX], autorange=False),
             aspectmode='cube',
-            
-            # Camera configuration for optimal viewing angle
             camera=dict(
-                up=dict(x=0, y=0, z=1),        # Z-axis points up
-                center=dict(x=0, y=0, z=0),    # Look at origin
-                eye=dict(x=2.2, y=0.8, z=1.4), # Camera position (tuned for clarity)
+                up=dict(x=0, y=0, z=1),
+                center=dict(x=0, y=0, z=0),
+                eye=dict(x=2.2, y=0.8, z=1.4),
             ),
         ),
-        
-        # Minimize margins to maximize plot area
         margin=dict(l=0, r=0, b=0, t=40),
-        
-        # Hide legend (we don't need it for this simple visualization)
         showlegend=False
     )
     
@@ -408,7 +451,14 @@ outputs_card = dbc.Card([
 # MAIN APPLICATION LAYOUT
 # ==============================================================================
 
+# Create the initial "home" figure for the robot arm
+initial_home_thetas = [0, 0, 0, 0, 90]
+initial_home_positions = kin.get_all_joint_positions(initial_home_thetas)
+initial_figure = plot_robot_arm(initial_home_positions)
+
 app.layout = dbc.Container([
+    # Store for previous and current joint positions for animation
+    dcc.Store(id='joint-positions-store', data={'prev': initial_home_positions.tolist(), 'current': initial_home_positions.tolist()}),
     # Application title (large, centered, with margins)
     html.H1(
         "5-DOF Robotic Arm - Inverse Kinematics Simulator",
@@ -436,6 +486,7 @@ app.layout = dbc.Container([
         dbc.Col([
             dcc.Graph(
                 id='3d-plot-graph',               # Unique ID for callback
+                figure=initial_figure,            # Set the initial figure
                 style={'height': '600px'}         # Fixed height for consistency
             )
         ], width=5),  # 5/12 columns
@@ -451,7 +502,7 @@ app.layout = dbc.Container([
     # Outputs: What this callback will update
     # ------------------------------------------------------------------
     [
-        Output('3d-plot-graph', 'figure'),           # Update 3D visualization
+        Output('joint-positions-store', 'data'),
         Output('joint-angles-table', 'data'),        # Update angles table
         Output('joint-positions-table', 'data'),     # Update positions table
         Output('error-message-alert', 'children'),   # Error message text
@@ -470,13 +521,14 @@ app.layout = dbc.Container([
         State('px-input', 'value'),          # Read Px value
         State('py-input', 'value'),          # Read Py value
         State('pz-input', 'value'),          # Read Pz value
-        State('elbow-mode-dropdown', 'value') # Read elbow mode selection
+        State('elbow-mode-dropdown', 'value'), # Read elbow mode selection
+        State('joint-positions-store', 'data')
     ],
     
     # Don't run callback on page load (only when button clicked)
     prevent_initial_call=True
 )
-def update_simulation(n_clicks, px, py, pz, elbow_mode):
+def update_simulation(n_clicks, px, py, pz, elbow_mode, joint_data):
     """
     Main callback function that orchestrates the entire IK calculation and display.
     
@@ -546,12 +598,19 @@ def update_simulation(n_clicks, px, py, pz, elbow_mode):
         # ------------------------------------------------------------------
         # STEP 4: Generate visualization and format tables
         # ------------------------------------------------------------------
-        fig = plot_robot_arm(joint_positions)           # Create 3D plot
+        new_joint_positions = np.asarray(ik_res["joints"], dtype=float)
+        
+        # Get previous positions, if available, otherwise use current as prev
+        prev_joint_positions = joint_data.get('current')
+        if prev_joint_positions is None:
+            prev_joint_positions = new_joint_positions.tolist()
+
+        
         angles_data = create_angles_table(thetas_deg)   # Format angles for table
         positions_data = create_positions_table(joint_positions)  # Format positions
         
         # Return all outputs (no error)
-        return fig, angles_data, positions_data, "", False
+        return {'prev': prev_joint_positions, 'current': new_joint_positions.tolist()}, angles_data, positions_data, "", False
 
     except ValueError as e:
         # ------------------------------------------------------------------
@@ -582,7 +641,7 @@ def update_simulation(n_clicks, px, py, pz, elbow_mode):
         
         # Return home position with error message
         return (
-            fig,                                      # Show home position plot
+            dash.no_update,                                      # Show home position plot
             create_angles_table(home_thetas),         # Show home angles
             create_positions_table(home_positions),   # Show home positions
             f"Error: Target Unreachable. {e}",        # Display error details
@@ -601,6 +660,123 @@ def update_simulation(n_clicks, px, py, pz, elbow_mode):
             f"Unexpected error: {e}",                # Show error message
             True                                     # Show error alert
         )
+
+# ==============================================================================
+# CLIENTSIDE CALLBACK FOR ANIMATION
+# ==============================================================================
+clientside_callback(
+    """
+    function(joint_data, figure) {
+        if (!joint_data.prev || !joint_data.current) {
+            return figure;
+        }
+
+        const duration = 1000;
+        const start_time = performance.now();
+        const prev = joint_data.prev;
+        const current = joint_data.current;
+
+        function get_cylinder_mesh(p1, p2, radius, n_sides = 20) {
+            const length = Math.sqrt(Math.pow(p2[0] - p1[0], 2) + Math.pow(p2[1] - p1[1], 2) + Math.pow(p2[2] - p1[2], 2));
+            if (length === 0) return {x: [], y: [], z: []};
+
+            const axis = [(p2[0] - p1[0]) / length, (p2[1] - p1[1]) / length, (p2[2] - p1[2]) / length];
+            
+            let perp_axis;
+            if (Math.abs(axis[2]) < 0.99) {
+                perp_axis = [axis[1] * 1 - axis[2] * 0, axis[2] * 0 - axis[0] * 1, axis[0] * 0 - axis[1] * 0];
+            } else {
+                perp_axis = [axis[1] * 0 - axis[2] * 1, axis[2] * 0 - axis[0] * 0, axis[0] * 1 - axis[1] * 0];
+            }
+            const perp_norm = Math.sqrt(perp_axis[0]*perp_axis[0] + perp_axis[1]*perp_axis[1] + perp_axis[2]*perp_axis[2]);
+            perp_axis = [perp_axis[0]/perp_norm, perp_axis[1]/perp_norm, perp_axis[2]/perp_norm];
+
+            const perp_axis2 = [axis[1] * perp_axis[2] - axis[2] * perp_axis[1], axis[2] * perp_axis[0] - axis[0] * perp_axis[2], axis[0] * perp_axis[1] - axis[1] * perp_axis[0]];
+            
+            const t = Array.from({length: n_sides + 1}, (_, i) => i * 2 * Math.PI / n_sides);
+            
+            const circ_pts = t.map(angle => [
+                radius * (Math.cos(angle) * perp_axis[0] + Math.sin(angle) * perp_axis2[0]),
+                radius * (Math.cos(angle) * perp_axis[1] + Math.sin(angle) * perp_axis2[1]),
+                radius * (Math.cos(angle) * perp_axis[2] + Math.sin(angle) * perp_axis2[2])
+            ]);
+
+            const p_start = circ_pts.map(pt => [p1[0] + pt[0], p1[1] + pt[1], p1[2] + pt[2]]);
+            const p_end = circ_pts.map(pt => [p2[0] + pt[0], p2[1] + pt[1], p2[2] + pt[2]]);
+
+            let x = [], y = [], z = [];
+            for (let i = 0; i < p_start.length; i++) {
+                x.push(p_start[i][0], p_end[i][0]);
+                y.push(p_start[i][1], p_end[i][1]);
+                z.push(p_start[i][2], p_end[i][2]);
+            }
+            return {x, y, z};
+        }
+
+        function animate() {
+            const now = performance.now();
+            const time_fraction = Math.min((now - start_time) / duration, 1);
+
+            const interpolated_positions = prev.map((start, i) => {
+                const end = current[i];
+                return start.map((val, j) => val + (end[j] - val) * time_fraction);
+            });
+            
+            const new_figure = JSON.parse(JSON.stringify(figure));
+            const link_radii = [15, 12, 12, 10, 8];
+
+            for (let i = 0; i < interpolated_positions.length - 1; i++) {
+                const p1 = interpolated_positions[i];
+                const p2 = interpolated_positions[i+1];
+                const cyl_mesh = get_cylinder_mesh(p1, p2, link_radii[i]);
+                
+                new_figure.data[i].x = cyl_mesh.x;
+                new_figure.data[i].y = cyl_mesh.y.map(y => -y);
+                new_figure.data[i].z = cyl_mesh.z;
+            }
+
+            const jp = interpolated_positions;
+            const x_plot = jp.map(p => p[0]);
+            const y_plot = jp.map(p => -p[1]);
+            const z_plot = jp.map(p => p[2]);
+
+            new_figure.data[5].x = x_plot;
+            new_figure.data[5].y = y_plot;
+            new_figure.data[5].z = z_plot;
+
+            Plotly.react('3d-plot-graph', new_figure);
+
+            if (time_fraction < 1) {
+                requestAnimationFrame(animate);
+            }
+        }
+        
+        requestAnimationFrame(animate);
+        return dash_clientside.no_update;
+    }
+    """,
+    Output('3d-plot-graph', 'figure'),
+    Input('joint-positions-store', 'data'),
+    State('3d-plot-graph', 'figure'),
+    prevent_initial_call=True
+)
+
+
+# ==============================================================================
+# INITIAL FIGURE CALLBACK
+# ==============================================================================
+@app.callback(
+    Output('3d-plot-graph', 'figure', allow_duplicate=True),
+    Input('solve-button', 'n_clicks'),
+    prevent_initial_call='initial_duplicate'
+)
+def initial_figure_callback(n_clicks):
+    if n_clicks and n_clicks > 0:
+        return dash.no_update
+    # This callback is now only used to prevent updates on initial load,
+    # the figure is already created in the layout.
+    return dash.no_update
+
 
 # ==============================================================================
 # RUN APPLICATION
